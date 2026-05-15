@@ -5,7 +5,7 @@ set -e
 DISTRO_NAME="eXodite"
 DISTRO_NAME_LOWER="exodite"
 DISTRO_ID="exodite"
-VERSION="2.0.0
+VERSION="2.0.0"
 
 RESET="\e[0m"
 RED="\e[31m"
@@ -523,10 +523,9 @@ configure_system() {
     printf '%b\n' "$logo_ansi" > /mnt/etc/fastfetch/logo.txt
     echo "$conf_json" > /mnt/etc/fastfetch/config.jsonc
 
-    cat > /mnt/setup.sh << EOF
+    cat > /mnt/setup.sh << 'EOF'
 #!/bin/bash
 set -e
-trap 'rm -f /passwd.tmp' EXIT
 
 GPU_DRIVER="${CFG_GPU}"
 INSTALL_YAY="${CFG_INSTALL_YAY}"
@@ -547,14 +546,14 @@ printf 'NAME="${DISTRO_NAME} Linux"\nID=${DISTRO_ID}\nID_LIKE=arch\nPRETTY_NAME=
 
 sed -i 's/GRUB_DISTRIBUTOR="Arch"/GRUB_DISTRIBUTOR="${DISTRO_NAME}"/' /etc/default/grub
 
-if [ "\$GPU_DRIVER" = "${GPU_NVIDIA}" ] || [ "\$GPU_DRIVER" = "${GPU_NVIDIA_580}" ]; then
+if [ "$GPU_DRIVER" = "${GPU_NVIDIA}" ] || [ "$GPU_DRIVER" = "${GPU_NVIDIA_580}" ]; then
     sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="[^"]*/& nvidia-drm.modeset=1/' /etc/default/grub
     sed -i 's/MODULES=()/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
 fi
 
 if [ "${CFG_KERNEL}" = "linux-cachyos" ]; then
     if ! grep -q '\[cachyos\]' /etc/pacman.conf; then
-        printf '\n[cachyos]\nServer = https://mirror.cachyos.org/\$repo/\$arch\n' >> /etc/pacman.conf
+        printf '\n[cachyos]\nServer = https://mirror.cachyos.org/$repo/$arch\n' >> /etc/pacman.conf
     fi
     pacman-key --recv-keys --keyserver hkps://keyserver.ubuntu.com F1656F40D7482129 || \
         pacman-key --recv-keys --keyserver hkps://keys.mailfence.com F1656F40D7482129
@@ -571,14 +570,14 @@ echo "%wheel ALL=(ALL:ALL) ALL" > /etc/sudoers.d/10-wheel
 chmod 440 /etc/sudoers.d/10-wheel
 
 YAY_DONE=0
-if [ "\$GPU_DRIVER" = "${GPU_NVIDIA_580}" ]; then
+if [ "$GPU_DRIVER" = "${GPU_NVIDIA_580}" ]; then
     useradd -m -s /bin/bash tempbuilder || true
     usermod -aG wheel tempbuilder
     echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/99-yay-build
     chmod 440 /etc/sudoers.d/99-yay-build
     su - tempbuilder -c '
         export HOME=/home/tempbuilder
-        cd "\$HOME"
+        cd "$HOME"
         git clone https://aur.archlinux.org/yay-bin.git
         cd yay-bin
         makepkg -si --noconfirm
@@ -593,14 +592,14 @@ fi
 sed -i 's/^HOOKS=.*/HOOKS=(base udev autodetect modconf block filesystems keyboard fsck)/' /etc/mkinitcpio.conf
 mkinitcpio -P
 
-ROOT_UUID=\$(findmnt -n -o UUID /)
-sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=\"|GRUB_CMDLINE_LINUX_DEFAULT=\"root=UUID=\$ROOT_UUID |" /etc/default/grub
+ROOT_UUID=$(findmnt -n -o UUID /)
+sed -i "s|^GRUB_CMDLINE_LINUX_DEFAULT=\"|GRUB_CMDLINE_LINUX_DEFAULT=\"root=UUID=$ROOT_UUID |" /etc/default/grub
 
 if [ -d /sys/firmware/efi ]; then
     grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id="${DISTRO_NAME}"
 else
-    DISK=\$(lsblk -no PKNAME "\$(findmnt -n -o SOURCE /)" | head -1)
-    grub-install --target=i386-pc "/dev/\$DISK"
+    DISK=$(lsblk -no PKNAME "$(findmnt -n -o SOURCE /)" | head -1)
+    grub-install --target=i386-pc "/dev/$DISK"
 fi
 grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -626,6 +625,66 @@ echo '/swapfile none swap defaults 0 0' >> /etc/fstab
 echo 'fastfetch' >> /home/${CFG_USERNAME}/.bashrc
 echo 'fastfetch' >> /root/.bashrc
 
-if [ "\$INSTALL_YAY" = "Yes" ] && [ "\$YAY_DONE" -eq 0 ]; then
+if [ "$INSTALL_YAY" = "Yes" ] && [ "$YAY_DONE" -eq 0 ]; then
     useradd -m -s /bin/bash tempbuilder || true
-    usermod -
+    usermod -aG wheel tempbuilder
+    echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/99-yay-build
+    chmod 440 /etc/sudoers.d/99-yay-build
+    su - tempbuilder -c '
+        export HOME=/home/tempbuilder
+        cd "$HOME"
+        git clone https://aur.archlinux.org/yay-bin.git
+        cd yay-bin
+        makepkg -si --noconfirm
+        cd .. && rm -rf yay-bin
+    '
+    rm -f /etc/sudoers.d/99-yay-build
+    userdel -r tempbuilder 2>/dev/null || true
+fi
+EOF
+
+    chmod +x /mnt/setup.sh
+    echo -e "${CYAN}[*] Running chroot configuration${RESET}"
+    arch-chroot /mnt /bin/bash /setup.sh
+    rm -f /mnt/setup.sh
+}
+
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${RED}[!] Root required${RESET}"
+    exit 1
+fi
+
+setup_network
+gather_config
+
+if ! confirm_install; then
+    echo -e "\n${CYAN}[*] Aborted${RESET}"
+    exit 0
+fi
+
+if [[ "$CFG_KERNEL" == "linux-cachyos" ]]; then
+    setup_cachy_live || { echo -e "${RED}[!] CachyOS setup failed${RESET}"; exit 1; }
+fi
+
+echo -e "${PURPLE}\n=== Partitioning ===${RESET}"
+partition_disk
+
+echo -e "${PURPLE}\n=== Installing base ===${RESET}"
+install_base
+
+echo -e "${PURPLE}\n=== Configuring system ===${RESET}"
+configure_system
+
+echo -e "${NEON_PINK}${BOLD}
+╔══════════════════════════════════════════════════════════╗
+║                                                          ║
+║   ${DISTRO_NAME} Linux installed successfully!              ║
+║                                                          ║
+║   Remove USB and reboot                                  ║
+║                                                          ║
+║   Login: ${CFG_USERNAME}                                             ║
+║                                                          ║
+╚══════════════════════════════════════════════════════════╝
+${RESET}"
+
+cleanup
